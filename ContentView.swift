@@ -14,12 +14,16 @@ struct Movie: Identifiable, Codable {
     var sentiment: MovieSentiment
     var elo: Double
     var comparisonsCount: Int
+    /// Tracks how many times the movie has been reinforced through
+    /// comparisons. A higher value means the score is more reliable.
+    var confidenceLevel: Int = 1
     
     init(id: UUID = UUID(), title: String, sentiment: MovieSentiment) {
         self.id = id
         self.title = title
         self.sentiment = sentiment
         self.comparisonsCount = 0
+        self.confidenceLevel = 1
         self.elo = 1500.0
     }
     
@@ -316,7 +320,7 @@ struct ComparisonView: View {
                 ForEach(Array(orderedMovies.enumerated()), id: \.element.id) { index, movie in
                     let position = Double(index + 1)
                     let total = Double(orderedMovies.count)
-                    let targetScore = movieStore.calculateTargetScore(position: position, total: total)
+                    let targetScore = movieStore.calculateTargetScore(position: position, total: total, sentiment: movie.sentiment)
                     var updatedMovie = movie
                     updatedMovie.elo = (targetScore * 200) + 1000
                     updatedMovie.confidenceLevel += 1
@@ -458,6 +462,41 @@ class MovieStore: ObservableObject {
         // Update movies in store
         updateMovie(updatedWinner)
         updateMovie(updatedLoser)
+    }
+
+    /// Calculate the desired 0-10 score for a movie given its
+    /// ranking position within its sentiment group. The scoring
+    /// band expands as more movies are added so that eventually
+    /// movies can occupy the full 0-10 range. A small random
+    /// adjustment keeps scores from clumping together.
+    func calculateTargetScore(position: Double, total: Double, sentiment: MovieSentiment) -> Double {
+        // Base starting range
+        let initialMin = 5.1
+        let initialMax = 7.9
+
+        // Expand range as more movies are ranked. Each additional movie
+        // widens the band by 0.15 up to the extremes of 0 and 10.
+        let expansion = min(5.0, max(0, (total - 1)) * 0.15)
+        let minScore = max(0.0, initialMin - expansion)
+        let maxScore = min(10.0, initialMax + expansion)
+
+        let rankNormalized: Double
+        if total <= 1 {
+            rankNormalized = 0
+        } else {
+            rankNormalized = (position - 1) / (total - 1)
+        }
+
+        var score = minScore + (maxScore - minScore) * rankNormalized
+
+        // Good movies should never fall below 7.2
+        if sentiment == .likedIt {
+            score = max(score, 7.2)
+        }
+
+        // Apply a small random wiggle so that scores aren't identical
+        score += Double.random(in: -0.15...0.15)
+        return max(0, min(10, score))
     }
 }
 
